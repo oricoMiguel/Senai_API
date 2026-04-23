@@ -8,13 +8,13 @@ class Item(BaseModel):
   price: float
   
 @app.get("/")
-  async def root():
+async def root():
   return {"status": "ok", "message": "API rodando!"}
     
 @app.get("/health")
-  async def health():
+async def health():
   return {"status": "healthy"}
     
 @app.post("/items")
-  async def create_item(item: Item):
+async def create_item(item: Item):
   return {"created": item}
