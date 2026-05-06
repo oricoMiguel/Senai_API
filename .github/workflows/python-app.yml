@@ -43,3 +43,11 @@ jobs:
         with:
           username: ${{secrets.DOCKER_USUARIO}} 
           password: ${{secrets.DOCKER_PWD}} 
+
+      - name: Build and push Docker images
+        uses: docker/build-push-action@v7.1.0
+        with:
+          push: true
+          tags:  |
+            miguelxxx/senai_api_tb:latest
+            miguelxxx/senai_api_tb:${{github.sha}}
