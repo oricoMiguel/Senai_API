@@ -2,12 +2,16 @@ name: Python application
 
 on:
   push:
-    branches: [ "main" ]
+    branches: [ "main", "develop" ] # Adicionado a branch develop para homologação
   pull_request:
-    branches: [ "main" ]
+    branches: [ "main", "develop" ]
 
 permissions:
   contents: read
+
+# Variável global recomendada para evitar repetição do nome da imagem
+env:
+  IMAGE_NAME: miguelxxx/senai_api_tb
 
 jobs:
   BUILD:
@@ -22,7 +26,7 @@ jobs:
         uses: actions/setup-python@v5
         with:
           python-version: "3.10"
-          cache: 'pip' # Otimiza futuras execuções
+          cache: 'pip'
 
       - name: Install dependencies
         run: |
@@ -32,9 +36,7 @@ jobs:
 
       - name: Lint with flake8
         run: |
-          # Para parar o build em erros de sintaxe ou nomes indefinidos
           flake8 . --count --select=E9,F63,F7,F82 --show-source --statistics
-          # Avisos saem como saída, mas não param o build (--exit-zero)
           flake8 . --count --exit-zero --max-complexity=10 --max-line-length=127 --statistics
 
       - name: Test with Pytest
@@ -47,7 +49,7 @@ jobs:
     needs: BUILD
     steps:
       - name: Checkout do código
-        uses: actions/checkout@v4 # OBRIGATÓRIO para o Docker achar o Dockerfile
+        uses: actions/checkout@v4
 
       - name: Set up Docker Buildx
         uses: docker/setup-buildx-action@v3
@@ -63,40 +65,74 @@ jobs:
         with:
           context: .
           push: true
+          # Utilizando a variável global declarada no topo do arquivo
           tags:  |
-            miguelxxx/senai_api_tb:latest
-            miguelxxx/senai_api_tb:${{ github.sha }}
+            ${{ env.IMAGE_NAME }}:latest
+            ${{ env.IMAGE_NAME }}:${{ github.sha }}
 
-  DEPLOY:
-    name: Implantando na EC2
+  # ==================== AMBIENTE DE HOMOLOGAÇÃO ====================
+  DEPLOY_HOMOLOGACAO:
+    name: Implantando em Homologação (Porta 8080)
     runs-on: ubuntu-latest
     needs: IMAGEM
-
+    # Executa apenas se o push/merge acontecer na branch 'develop'
+    if: github.ref == 'refs/heads/develop'
+    environment: homologation
+    
     steps:
-      - name: Deploy na EC2 via SSH
+      - name: Deploy na EC2 via SSH (Homologação)
         uses: appleboy/ssh-action@v1.0.3
         with:
           host: ${{ secrets.EC2_HOST }}
           username: ${{ secrets.EC2_USER }}
-          key: ${{ secrets.EC2_KEY }}
+          key: ${{ secrets.EC2_KEY }} # Busca do repositório global (Opção 1)
           script: |
-              # Garantir que o Docker está rodando e fazer pull da imagem nova
-              sudo docker pull miguelxxx/senai_api_tb:latest
-              
-              # Parar e remover container antigo (ignora erro se não existir)
-              sudo docker stop senai_api_tb || true
-              sudo docker rm senai_api_tb || true
+            sudo docker pull ${{ env.IMAGE_NAME }}:latest
+            
+            sudo docker stop senai_api_tb_homol || true
+            sudo docker rm senai_api_tb_homol || true
 
-              # Rodar o novo container
-              # Mapeamento 80(externo):8080(interno do seu app)
-              sudo docker run --name senai_api_tb -d \
-                --restart unless-stopped \
-                -p 80:8080 \
-                miguelxxx/senai_api_tb:latest
+            # Rodando na porta externa 8080 conforme exigido no Roteiro
+            sudo docker run --name senai_api_tb_homol -d \
+              --restart unless-stopped \
+              -p 8080:8080 \
+              ${{ env.IMAGE_NAME }}:latest
 
-              # Verificar se o serviço subiu (Healthcheck)
-              echo "Aguardando inicialização..."
-              sleep 10
-              curl -f http://localhost:80/health || (echo "Erro no Healthcheck" && exit 1)
-              
-              echo "Deploy realizado com sucesso!"
+            echo "Aguardando inicialização da Homologação..."
+            sleep 10
+            curl -f http://localhost:8080/health || (echo "Erro no Healthcheck de Homologação" && exit 1)
+            echo "Deploy em Homologação realizado com sucesso!"
+
+  # ==================== AMBIENTE DE PRODUÇÃO ====================
+  DEPLOY_PRODUCAO:
+    name: Implantando em Produção (Porta 80)
+    runs-on: ubuntu-latest
+    needs: IMAGEM
+    # Condição obrigatória: Garante execução apenas na branch 'main'
+    if: github.ref == 'refs/heads/main'
+    # Vincula ao Environment que você configurou com aprovação manual
+    environment: production 
+
+    steps:
+      - name: Deploy na EC2 via SSH (Produção)
+        uses: appleboy/ssh-action@v1.0.3
+        with:
+          host: ${{ secrets.EC2_HOST }}      # Pega do Environment local
+          username: ${{ secrets.EC2_USER }}  # Pega do Environment local
+          key: ${{ secrets.EC2_KEY }}       # Fallback automático para o repositório global (Opção 1)
+          script: |
+            sudo docker pull ${{ env.IMAGE_NAME }}:latest
+            
+            sudo docker stop senai_api_tb || true
+            sudo docker rm senai_api_tb || true
+
+            # Rodando na porta externa pública 80
+            sudo docker run --name senai_api_tb -d \
+              --restart unless-stopped \
+              -p 80:8080 \
+              ${{ env.IMAGE_NAME }}:latest
+
+            echo "Aguardando inicialização da Produção..."
+            sleep 10
+            curl -f http://localhost:80/health || (echo "Erro no Healthcheck de Produção" && exit 1)
+            echo "Deploy em Produção realizado com sucesso!"
